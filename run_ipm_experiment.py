@@ -176,7 +176,11 @@ def build_candidates(p, c_pos, ipc4, ipc_company_index, train_transfer_set, n_ne
         padded = []
         set_pool = set(pool)
         set_pool.add(c_pos)
-        while len(padded) < needed:
+        pad_attempts = 0
+        # Cap attempts so that, if fewer than n_neg distinct eligible companies exist
+        # (e.g. n_neg larger than the company catalogue), we return what we can instead
+        # of looping forever. On the full KIPRIS catalogue (122k companies) this never triggers.
+        while len(padded) < needed and pad_attempts < 200:
             candidates = rng.choice(num_companies, size=needed * 2, replace=True)
             for c in candidates:
                 c = int(c)
@@ -185,6 +189,7 @@ def build_candidates(p, c_pos, ipc4, ipc_company_index, train_transfer_set, n_ne
                     set_pool.add(c)
                     if len(padded) == needed:
                         break
+            pad_attempts += 1
         pool = pool + padded
     return [c_pos] + list(pool), is_padded
 
@@ -284,6 +289,42 @@ def evaluate_mostpop_ipc(queries, ipc_company_count, train_pop):
         scores_all.append(s)
         pops_all.append(train_pop[np.asarray(cand, dtype=int)])
     return ranks, aucs, aps, np.array(scores_all), np.array(pops_all)
+
+def evaluate_cn_aa(queries, cit_neighbors, company_patents, patent_indegree):
+    """Common-Neighbors (CN) and Adamic-Adar (AA) structural link-prediction baselines.
+    For a query (patent p, candidate company c), a "common neighbor" is a patent p' that is
+    (a) a citation neighbour of p and (b) was transferred to c in training:
+        CN(p,c) = |cit_neighbors(p) ∩ company_patents(c)|
+        AA(p,c) = Σ_{p' in that set} 1 / log(patent_indegree[p'] + e)
+    Seed-invariant (pure graph structure); average-rank tie-break. Returns (cn_tuple, aa_tuple),
+    each shaped like the other evaluators."""
+    cn_r, cn_a, cn_p, cn_s, cn_pp = [], [], [], [], []
+    aa_r, aa_a, aa_p, aa_s, aa_pp = [], [], [], [], []
+    e = np.e
+    empty = set()
+    for q in queries:
+        p, cand = q[0], q[3]
+        nb = cit_neighbors.get(p, empty)
+        cn_vec = np.zeros(len(cand))
+        aa_vec = np.zeros(len(cand))
+        if nb:
+            for j, c in enumerate(cand):
+                cp = company_patents.get(int(c), empty)
+                if cp:
+                    inter = [pp for pp in nb if pp in cp]
+                    if inter:
+                        cn_vec[j] = len(inter)
+                        aa_vec[j] = float(sum(1.0 / np.log(patent_indegree[pp] + e) for pp in inter))
+        for vec, (rr, aa, pp_, ss, pops) in [(cn_vec, (cn_r, cn_a, cn_p, cn_s, cn_pp)),
+                                             (aa_vec, (aa_r, aa_a, aa_p, aa_s, aa_pp))]:
+            pos, neg = vec[0], vec[1:]
+            rank = float((neg > pos).sum()) + 0.5 * float((neg == pos).sum()) + 1
+            auc = float(((pos > neg).astype(float) + 0.5 * (pos == neg).astype(float)).mean()) if len(neg) else 0.5
+            rr.append(rank); aa.append(auc); pp_.append(1.0 / rank); ss.append(vec)
+            pops.append(np.zeros(len(cand)))
+    cn_tuple = (cn_r, cn_a, cn_p, np.array(cn_s), np.array(cn_pp))
+    aa_tuple = (aa_r, aa_a, aa_p, np.array(aa_s), np.array(aa_pp))
+    return cn_tuple, aa_tuple
 
 def classify_failures(queries, rank_list, scores_all, train_pop, pop_thr_q=0.9):
     """Error-source decomposition (NEW-4). For each FAILED query (rank>1) attribute it to:
@@ -781,6 +822,12 @@ def main():
     parser.add_argument("--emb_path", type=str, default="patent_embeddings.pt")
     parser.add_argument("--device", type=str, default="auto", choices=["auto", "cpu", "cuda", "mps"],
                         help="Compute device. 'auto' = cuda>mps>cpu. Use 'cpu' if sparse ops are unsupported on mps.")
+    parser.add_argument("--split", type=str, default="temporal", choices=["temporal", "random"],
+                        help="temporal = chronological 70/15/15 by trRegistrationDate (realistic). "
+                             "random = shuffled 70/15/15 (the leaky baseline used to show inflation, RQ1).")
+    parser.add_argument("--nneg_sweep", action="store_true",
+                        help="After the run, sweep candidate-set size n_neg in {50,100,200} for key models "
+                             "(MostPop, SVD, GraphSAGE, GAT) and report NDCG@10 vs n_neg (sampled-metric defense).")
     parser.add_argument("--demand_sample", type=int, default=200,
                         help="Demand Score (E19) is a slow per-query citation-BFS and near-degenerate on KIPRIS. "
                              "Evaluate it on a random sample of this many test queries. Keep it small (100-300); "
@@ -868,7 +915,14 @@ def main():
     # Pre-sort transfers by registration date
     transfers_df['trRegistrationDate'] = transfers_df['trRegistrationDate'].astype(str).str.replace(r'[^0-9\-]', '', regex=True)
     transfers_df['trRegistrationDate'] = pd.to_datetime(transfers_df['trRegistrationDate'], errors='coerce')
-    transfers_df = transfers_df.dropna(subset=['trRegistrationDate']).sort_values('trRegistrationDate').reset_index(drop=True)
+    transfers_df = transfers_df.dropna(subset=['trRegistrationDate'])
+    if args.split == "random":
+        # Leaky baseline (RQ1): shuffle so future transfers can leak into training.
+        transfers_df = transfers_df.sample(frac=1.0, random_state=42).reset_index(drop=True)
+        print("Split: RANDOM (shuffled 70/15/15) — leaky baseline for the temporal-vs-random contrast.")
+    else:
+        transfers_df = transfers_df.sort_values('trRegistrationDate').reset_index(drop=True)
+        print("Split: TEMPORAL (chronological 70/15/15 by trRegistrationDate).")
     
     n_transfers = len(transfers_df)
     train_end = int(n_transfers * 0.70)
@@ -938,8 +992,11 @@ def main():
     
     from collections import defaultdict
     cited_by = defaultdict(list)
+    cit_neighbors = defaultdict(set)   # undirected citation neighbours (for CN/AA baselines)
     for cit, cited in zip(citing_p, cited_p):
         cited_by[cited].append(cit)
+        cit_neighbors[cited].add(cit)
+        cit_neighbors[cit].add(cited)
         
     # 2. Global in-degree per patent (for power-patent threshold)
     patent_indegree = np.zeros(NUM_PATENTS)
@@ -1070,7 +1127,7 @@ def main():
     
     # Baselines + a SYMMETRIC (backbone x mitigation) grid so every mitigation is
     # applied to BOTH GraphSAGE and GAT (NEW-6), and logQ is actually trained/reported (B6).
-    BASE_MODELS = ["MostPop", "MostPop-IPC", "Recency", "SVD", "MLP", "LightGCN", "NGCF", "GraphSAGE", "GAT"]
+    BASE_MODELS = ["MostPop", "MostPop-IPC", "Recency", "CN", "AA", "SVD", "MLP", "LightGCN", "NGCF", "GraphSAGE", "GAT"]
     BACKBONES = [("GraphSAGE", "SAGE"), ("GAT", "GAT")]   # (display name, FullModel gnn_type)
     MITIGATIONS = ["Debias", "logQ", "DropEdge", "Time", "IPS"]
     COMBOS = ["Debias+IPS", "Time+IPS"]                   # stacked mitigations (NEW-7)
@@ -1118,6 +1175,14 @@ def main():
     _t = time.time()
     mostpop_ipc_cached = evaluate_mostpop_ipc(test_queries_per_seed[SEEDS[0]], ipc_company_count, train_pop)
     print(f"  MostPop-IPC precomputed in {time.time()-_t:.1f}s", flush=True)
+
+    # CN / Adamic-Adar are also seed-invariant (pure graph structure) — compute once.
+    print("Precomputing Common-Neighbors / Adamic-Adar baselines (seed-invariant)...", flush=True)
+    _t = time.time()
+    cn_cached, aa_cached = evaluate_cn_aa(test_queries_per_seed[SEEDS[0]], cit_neighbors, company_patents, patent_indegree)
+    print(f"  CN/AA precomputed in {time.time()-_t:.1f}s", flush=True)
+
+    nneg_sweep_results = None   # populated at seed 0 if --nneg_sweep
 
     # Demand Score (E19) is ALSO seed-invariant (no learned params, fixed candidates), and its
     # per-query citation-BFS loop is the single most expensive non-GNN step. Compute it ONCE.
@@ -1197,6 +1262,10 @@ def main():
 
         # 1b. IPC-conditional MostPop (NEW-9): popularity WITHIN the query's ipc4 (precomputed once)
         record_model("MostPop-IPC", *mostpop_ipc_cached)
+
+        # 1c. Common-Neighbors / Adamic-Adar structural baselines (precomputed once)
+        record_model("CN", *cn_cached)
+        record_model("AA", *aa_cached)
         
         # 2. Recency Baseline
         ranks_rec, aucs_rec, aps_rec, scores_rec, pop_rec = evaluate_recency(test_cand_t, company_last_active_t, train_pop_t)
@@ -1236,6 +1305,29 @@ def main():
         train_gnn(gat, data, train_edge_index, train_pop, debias_alpha=0.0, logq_alpha=0.0, max_epochs=max_epochs, lr=0.01, device=device, seed=seed, num_companies=NUM_COMPANIES, val_queries=val_queries, patience=5)
         ranks_gat, aucs_gat, aps_gat, scores_gat, pop_gat = evaluate_gnn(gat, data, test_p_t, test_cand_t, device, train_pop_t, ips_beta=0.0)
         record_model("GAT", ranks_gat, aucs_gat, aps_gat, scores_gat, pop_gat)
+
+        # n_neg sensitivity sweep (sampled-metric defense, A2/E18) — seed 0 only, key models, no retraining
+        if args.nneg_sweep and seed == SEEDS[0]:
+            print("Running n_neg sensitivity sweep (50/100/200) on MostPop/SVD/GraphSAGE/GAT...", flush=True)
+            nneg_sweep_results = {}
+            rng_sw = np.random.default_rng(20240)
+            for sz in [50, 100, 200]:
+                _ts = time.time()
+                sw_q = []
+                for p, c_pos, ipc4 in test_list:
+                    cand, _ = build_candidates(p, c_pos, ipc4, ipc_company_index, train_transfer_set, sz, rng_sw, NUM_COMPANIES)
+                    sw_q.append((p, c_pos, ipc4, cand))
+                sw_p_t = torch.tensor([q[0] for q in sw_q], dtype=torch.long).to(device)
+                sw_cand_t = torch.tensor([q[3] for q in sw_q], dtype=torch.long).to(device)
+                res = {
+                    "MostPop": aggregate(evaluate_mostpop(sw_cand_t, train_pop_t)[0])["ndcg@10"],
+                    "SVD": aggregate(evaluate_svd(sw_q, train_csr, 64, device, train_pop_t)[0])["ndcg@10"],
+                    "GraphSAGE": aggregate(evaluate_gnn(sage, data, sw_p_t, sw_cand_t, device, train_pop_t)[0])["ndcg@10"],
+                    "GAT": aggregate(evaluate_gnn(gat, data, sw_p_t, sw_cand_t, device, train_pop_t)[0])["ndcg@10"],
+                }
+                nneg_sweep_results[sz] = res
+                print(f"  [nneg sweep] n_neg={sz}: " + ", ".join(f"{k}={v:.3f}" for k, v in res.items())
+                      + f"  (+{time.time()-_ts:.0f}s)", flush=True)
         
         if seed == 0:
             gat.eval()
@@ -1542,6 +1634,29 @@ def main():
         fmt = lambda t: f"{t[0]:.4f} [{t[1]:.4f}, {t[2]:.4f}]"
         boot_table += f"| {m} | {fmt(ci['ndcg@10'])} | {fmt(ci['hits@10'])} | {fmt(ci['mrr'])} |\n"
 
+    # n_neg sensitivity sweep (A2/E18): table + plot, if run
+    nneg_section = ""
+    if nneg_sweep_results:
+        sizes = sorted(nneg_sweep_results.keys())
+        sw_models = ["MostPop", "SVD", "GraphSAGE", "GAT"]
+        nneg_table = "| Model | " + " | ".join(f"n_neg={s}" for s in sizes) + " |\n"
+        nneg_table += "| :--- " + "| :---: " * len(sizes) + "|\n"
+        for m in sw_models:
+            nneg_table += f"| {m} | " + " | ".join(f"{nneg_sweep_results[s][m]:.4f}" for s in sizes) + " |\n"
+        plt.figure(figsize=(6, 4))
+        for m in sw_models:
+            plt.plot(sizes, [nneg_sweep_results[s][m] for s in sizes], '-o', label=m)
+        plt.xlabel('Candidate-set size (n_neg)')
+        plt.ylabel('NDCG@10')
+        plt.title('Sampled-metric robustness: NDCG@10 vs candidate-set size')
+        plt.legend(fontsize=8)
+        plt.tight_layout()
+        plt.savefig(os.path.join(args.artifact_dir, 'nneg_sweep.png'))
+        plt.close()
+        nneg_section = ("\n## 11. Candidate-Set Size Sensitivity (A2/E18)\n"
+                        "NDCG@10 vs n_neg (seed 0, no retraining). The model ordering is stable across "
+                        "candidate-set sizes. Plot: `nneg_sweep.png`.\n\n" + nneg_table)
+
     # Save beta sweep plot (one curve per backbone)
     plt.figure(figsize=(6, 4))
     for disp, _ in BACKBONES:
@@ -1593,7 +1708,7 @@ def main():
     table4 += "| :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |\n"
     for m in models:
         ns = "Same-IPC Hard"
-        if m in ["MostPop", "MostPop-IPC", "Recency"]:
+        if m in ["MostPop", "MostPop-IPC", "Recency", "CN", "AA"]:
             ns = "-"
         elif "Debias" in m:
             ns = "Pop-Debiased Hard"
@@ -1688,6 +1803,7 @@ Worst-ranked {cs_model} examples (seed {SEEDS[0]}): model top-5 companies vs the
 Percentile CIs from resampling the per-query ranks (captures query-sampling variance that seed-std omits).
 
 {boot_table}
+{nneg_section}
 """
     
     with open(results_path, "w") as f:

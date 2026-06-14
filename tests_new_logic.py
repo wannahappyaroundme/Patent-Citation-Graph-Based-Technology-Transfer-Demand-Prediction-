@@ -88,7 +88,22 @@ def test_classify_failures():
     print("  test_classify_failures OK")
 
 
+def test_cn_aa():
+    # patent 0's citation neighbours = {10, 11}
+    cit_neighbors = {0: {10, 11}}
+    company_patents = {0: {10}, 1: {11, 12}, 2: {99}}   # what each company transferred
+    indeg = np.zeros(100); indeg[10] = 5; indeg[11] = 2
+    queries = [(0, 0, "X", [0, 1, 2])]   # positive = company 0
+    (cn_r, *_), (aa_r, *_) = R.evaluate_cn_aa(queries, cit_neighbors, company_patents, indeg)
+    # CN: pos(c0)=|{10,11}∩{10}|=1, neg(c1)=|∩{11,12}|=1 (tie), neg(c2)=0 -> rank 0 + 0.5*1 + 1 = 1.5
+    assert abs(cn_r[0] - 1.5) < 1e-9, cn_r
+    # AA: pos uses p=10 (1/log(5+e)=0.489), neg c1 uses p=11 (1/log(2+e)=0.645) > pos, c2=0 -> rank 2
+    assert abs(aa_r[0] - 2.0) < 1e-9, aa_r
+    print("  test_cn_aa OK")
+
+
 if __name__ == "__main__":
+    test_cn_aa()
     test_tie_aware_ranks()
     test_aggregate_with_n()
     test_bootstrap_ci()

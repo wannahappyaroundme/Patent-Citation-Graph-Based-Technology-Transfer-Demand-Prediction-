@@ -1,0 +1,81 @@
+%% ===========================================================================
+%% TITLE PAGE (with author details) — submit as a SEPARATE file from the
+%% anonymized manuscript (Information Processing & Management uses double-
+%% anonymized review). Fill in the [[...]] placeholders before submission.
+%% ===========================================================================
+\documentclass[preprint,12pt]{elsarticle}
+\usepackage{amssymb,amsmath}
+\journal{Information Processing \& Management}
+
+\begin{document}
+
+\begin{frontmatter}
+
+\title{When Learned Models Lose to Popularity: A Diagnosis of Patent
+Technology-Transfer Demand Prediction under Realistic Evaluation}
+
+%% --- Authors (match the order in the submission system; check spelling) ---
+\author[inst1]{[[Given Name]]~[[Family Name]]\corref{cor1}}
+\ead{[[corresponding.author@institution.edu]]}
+
+% \author[inst1]{[[Second Author]]}
+% \author[inst2]{[[Third Author]]}
+
+\affiliation[inst1]{organization={[[Department, Institution]]},
+            addressline={[[Street address]]},
+            city={[[City]]},
+            postcode={[[Postcode]]},
+            state={[[State/Province]]},
+            country={Republic of Korea}}
+
+% \affiliation[inst2]{organization={[[Department, Institution]]},
+%             city={[[City]]}, country={[[Country]]}}
+
+\cortext[cor1]{Corresponding author.}
+
+\begin{abstract}
+(The abstract is included in the anonymized manuscript file; it may be repeated
+here or omitted on the title page per the editor's preference.)
+\end{abstract}
+
+\begin{keyword}
+patent technology transfer \sep link prediction \sep graph neural networks \sep
+popularity bias \sep cold-start \sep evaluation methodology
+\end{keyword}
+
+\end{frontmatter}
+
+%% ===========================================================================
+\section*{CRediT authorship contribution statement}
+%% Edit to reflect actual contributions; remove roles that do not apply.
+\textbf{[[Author 1]]:} Conceptualization, Methodology, Software, Formal analysis,
+Investigation, Data curation, Visualization, Writing -- original draft,
+Writing -- review \& editing.
+% \textbf{[[Author 2]]:} Supervision, Methodology, Writing -- review \& editing.
+% \textbf{[[Author 3]]:} Funding acquisition, Resources, Validation.
+
+\section*{Declaration of competing interest}
+The authors declare that they have no known competing financial interests or
+personal relationships that could have appeared to influence the work reported in
+this paper.
+
+\section*{Declaration of generative AI in the writing process}
+%% Required by Elsevier if applicable; edit/remove as appropriate.
+[[State whether and how generative AI tools were used, e.g., for language editing,
+and confirm the authors reviewed and take full responsibility for the content. If
+not used, remove this section.]]
+
+\section*{Acknowledgements}
+[[Funding sources (with grant numbers), language/writing help, and computing
+resources. Do NOT place acknowledgements in the anonymized manuscript or as a
+footnote to the title.]]
+
+\section*{Data availability}
+The KIPRIS patent data is obtained from the Korea Intellectual Property Rights
+Information Service API (https://plus.kipris.or.kr); access requires a free API key,
+and redistribution of the raw exports is subject to KIPRIS terms. The preprocessing
+and evaluation code, experiment scripts, and an embedding-regeneration script are
+released at [[repository URL / DOI]], enabling full reproduction of all tables and
+figures from the KIPRIS exports.
+
+\end{document}

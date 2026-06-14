@@ -12,7 +12,17 @@ from matplotlib.patches import Patch
 
 OUT = "paper_figures"
 os.makedirs(OUT, exist_ok=True)
-plt.rcParams.update({"font.size": 10, "axes.grid": True, "grid.alpha": 0.3, "figure.dpi": 200})
+plt.rcParams.update({"font.size": 10, "axes.grid": True, "grid.alpha": 0.3,
+                     "figure.dpi": 300, "savefig.dpi": 300, "savefig.bbox": "tight"})
+
+
+def _save(fig, name, fignum):
+    """Save each figure both under its descriptive name and the Elsevier
+    Figure_N convention, as 300-dpi PNG and vector PDF (IPM artwork rules)."""
+    for stem in (name, f"Figure_{fignum}"):
+        fig.savefig(f"{OUT}/{stem}.png")
+        fig.savefig(f"{OUT}/{stem}.pdf")
+    plt.close(fig)
 
 # (model, ndcg10, ndcg_std, auc, group)  — group: pop, cf, text, gnn, mit
 # TEMPORAL split, 10 seeds (run_ipm_results_temporal.md §1).
@@ -74,13 +84,13 @@ def fig1_main():
     ax1.legend(handles=handles, fontsize=7, loc="lower right")
     fig.suptitle("Every learned model falls below the popularity baseline; AUC near chance", fontsize=11)
     fig.tight_layout(rect=(0, 0, 1, 0.97))
-    fig.savefig(f"{OUT}/fig1_main_performance.png"); plt.close(fig)
+    _save(fig, "fig1_main_performance", 2)
 
 
 def fig2_tiebreak():
     models = ["SVD", "GraphSAGE+logQ", "GAT"]
     strict = [0.953, 1.000, 0.451]   # pre-fix (strict '>')
-    avg = [0.037, 0.135, 0.072]      # post-fix (average-rank)
+    avg = [0.037, 0.125, 0.074]      # post-fix (average-rank, 10-seed)
     x = np.arange(len(models)); w = 0.38
     fig, ax = plt.subplots(figsize=(6.5, 4))
     ax.bar(x - w / 2, strict, w, label="Strict '>' tie-break (artifact)", color="#EE6677")
@@ -91,7 +101,7 @@ def fig2_tiebreak():
     ax.set_ylabel("NDCG@10"); ax.set_ylim(0, 1.1)
     ax.set_title("Tie-break artifact: cold-start ties inflate no-information models to ~1.0")
     ax.legend(fontsize=8)
-    fig.tight_layout(); fig.savefig(f"{OUT}/fig2_tiebreak_artifact.png"); plt.close(fig)
+    fig.tight_layout(); _save(fig, "fig2_tiebreak_artifact", 3)
 
 
 def fig3_popbias():
@@ -115,7 +125,7 @@ def fig3_popbias():
     ax2.set_yticks(yb); ax2.set_yticklabels(names, fontsize=8); ax2.invert_yaxis()
     ax2.set_xlabel("Hard-negative inversion rate (%)")
     ax2.set_title("(b) Popular negatives outrank the positive")
-    fig.tight_layout(); fig.savefig(f"{OUT}/fig3_popularity_bias.png"); plt.close(fig)
+    fig.tight_layout(); _save(fig, "fig3_popularity_bias", 4)
 
 
 def fig4_stratified():
@@ -126,7 +136,7 @@ def fig4_stratified():
     for i, v in enumerate(vals): ax.text(i, v + 0.01, f"{v:.3f}", ha="center", fontsize=9)
     ax.set_ylabel("GAT NDCG@10"); ax.set_ylim(0, 0.45)
     ax.set_title("GAT does best on unpopular targets — but absolute values stay low")
-    fig.tight_layout(); fig.savefig(f"{OUT}/fig4_stratified.png"); plt.close(fig)
+    fig.tight_layout(); _save(fig, "fig4_stratified", 5)
 
 
 def fig5_coldstart():
@@ -142,7 +152,7 @@ def fig5_coldstart():
     ax.set_xticks(x); ax.set_xticklabels(models); ax.set_ylabel("NDCG@10")
     ax.set_title("Patent cold-start: SVD scores 0.000 on unseen patents")
     ax.legend(fontsize=8)
-    fig.tight_layout(); fig.savefig(f"{OUT}/fig5_coldstart.png"); plt.close(fig)
+    fig.tight_layout(); _save(fig, "fig5_coldstart", 6)
 
 
 def fig6_error():
@@ -156,7 +166,7 @@ def fig6_error():
     ax.set_ylabel("Share of failed queries (%)"); ax.set_ylim(0, 105)
     ax.set_title("Error-source decomposition")
     ax.legend(fontsize=8, loc="lower center", bbox_to_anchor=(0.5, -0.32), ncol=1)
-    fig.tight_layout(); fig.savefig(f"{OUT}/fig6_error_sources.png"); plt.close(fig)
+    fig.tight_layout(); _save(fig, "fig6_error_sources", 7)
 
 
 def fig7_sweeps():
@@ -174,7 +184,7 @@ def fig7_sweeps():
     ax1.set_xlabel("IPS penalty β"); ax1.set_title("(a) IPS re-ranking sweep")
     ax2.set_xlabel("Debiased-NS exponent α"); ax2.set_title("(b) Popularity-debiased sampling sweep")
     fig.suptitle("Mitigation sweeps: no setting reaches the popularity baseline", fontsize=11)
-    fig.tight_layout(rect=(0, 0, 1, 0.95)); fig.savefig(f"{OUT}/fig7_mitigation_sweeps.png"); plt.close(fig)
+    fig.tight_layout(rect=(0, 0, 1, 0.95)); _save(fig, "fig7_mitigation_sweeps", 8)
 
 
 def fig8_rq1_split():
@@ -201,7 +211,7 @@ def fig8_rq1_split():
     ax2.set_xticks(x); ax2.set_xticklabels(models); ax2.set_ylabel("AUC"); ax2.set_ylim(0.4, 0.9)
     ax2.set_title("(b) AUC inflates under a random split"); ax2.legend(fontsize=8)
     fig.suptitle("RQ1: a random split lowers cold-start 91.7%→2.4% and reverses the verdict", fontsize=11)
-    fig.tight_layout(rect=(0, 0, 1, 0.95)); fig.savefig(f"{OUT}/fig8_split_contrast.png"); plt.close(fig)
+    fig.tight_layout(rect=(0, 0, 1, 0.95)); _save(fig, "fig8_split_contrast", 9)
 
 
 def fig0_pipeline():
@@ -250,7 +260,7 @@ def fig0_pipeline():
     axB.text(8, 0.8, "Transfers split temporally 70/15/15 by registration date; "
                      "test = most recent 15% (≈91.7% of test patents unseen)", ha="center", fontsize=8, color="#555555")
     fig.tight_layout()
-    fig.savefig(f"{OUT}/fig0_pipeline.png"); plt.close(fig)
+    _save(fig, "fig0_pipeline", 1)
 
 
 if __name__ == "__main__":

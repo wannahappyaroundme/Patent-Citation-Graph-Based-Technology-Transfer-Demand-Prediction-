@@ -32,7 +32,11 @@ Device auto-selects CUDA → MPS → CPU; override with `--device`. **Apple MPS 
 | `--nneg_sweep` | candidate-set-size sensitivity {50,100,200} for key models (sampled-metric defense) |
 | `--full_pool` · `--full_pool_cap N` | **unsampled** full-IPC-pool ranking (seed 0, key models): rank the positive against *all* eligible same-IPC companies, not n_neg sampled negatives — the strongest sampled-metric defense (Krichene & Rendle, 2020). Pools above N (default 1000) are down-capped |
 | `--demand_sample N` | evaluate the slow rule-based Demand Score on N test queries (default 200) |
+| `--fresh_start` | ignore any resume checkpoint and start from seed 0 (default is auto-resume; see below) |
 | `--device {auto,cpu,cuda,mps}` · `--data_dir` · `--emb_path` · `--artifact_dir` | environment |
+
+### Resuming an interrupted run (Colab timeout / Ctrl-C)
+The suite snapshots its full state to `<artifact_dir>/_resume_checkpoint.pt` **after every seed**. If a run dies (runtime recycled, accidental interrupt), just **re-run the exact same command** — it auto-resumes, skips finished seeds, and restores the expensive seed-invariant precomputes (Demand Score BFS, etc.). The checkpoint is config-guarded (a different `--split`/`--mode`/`--n_neg`/`--full_pool`/… is detected and the checkpoint is ignored, so a temporal and a random run never mix) and removed automatically once the report is written. Each completed seed keeps its exact computed values; only the remaining seeds run — scientifically identical to an uninterrupted run. To force a clean start, pass `--fresh_start`. To stop intentionally after seed *k* (and resume later), set the env var `_IPM_STOP_AFTER_SEED=k`.
 
 ## Required inputs (not in this repo)
 `.gitignore` excludes `kipris-csv/`, `*.csv`, `*.pt`. Supply locally before a real run:

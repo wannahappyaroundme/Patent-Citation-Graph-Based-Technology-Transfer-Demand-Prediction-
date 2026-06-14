@@ -878,6 +878,10 @@ def main():
                         help="Demand Score (E19) is a slow per-query citation-BFS and near-degenerate on KIPRIS. "
                              "Evaluate it on a random sample of this many test queries. Keep it small (100-300); "
                              "large values make E19 dominate runtime. Negative = use ALL (very slow, not recommended).")
+    parser.add_argument("--fresh_start", action="store_true",
+                        help="Ignore any existing _resume_checkpoint.pt in --artifact_dir and start from seed 0. "
+                             "By default the run AUTO-RESUMES from a matching checkpoint (same config), so an "
+                             "interrupted run (Colab timeout / Ctrl-C) can be continued by re-running the same command.")
     args = parser.parse_args()
     os.makedirs(args.artifact_dir, exist_ok=True)
     
@@ -893,6 +897,37 @@ def main():
         print(f"Running in FULL mode (Full dataset, {num_seeds} seeds, {max_epochs} epochs, {n_neg} hard negatives)...")
         
     SEEDS = list(range(num_seeds))
+
+    # ── Resume / checkpoint (survive Colab runtime death or accidental Ctrl-C) ──────
+    # The suite accumulates every per-seed result in RAM and writes the report only at
+    # the very end, so an interruption loses the whole run. We snapshot the FULL accumulator
+    # state to artifact_dir after each seed; re-running the SAME command auto-resumes,
+    # skipping finished seeds. A config change (split/mode/n_neg/full_pool/...) invalidates
+    # the checkpoint, so a temporal and a random run can never be mixed together.
+    RESUME_PATH = os.path.join(args.artifact_dir, "_resume_checkpoint.pt")
+    def _config_sig():
+        return {"mode": args.mode, "split": args.split, "n_neg": n_neg, "num_seeds": num_seeds,
+                "max_epochs": max_epochs, "company_feat": args.company_feat,
+                "full_pool": bool(args.full_pool), "full_pool_cap": args.full_pool_cap,
+                "demand_sample": args.demand_sample, "data_dir": args.data_dir, "emb_path": args.emb_path}
+    _ckpt = None
+    if os.path.exists(RESUME_PATH) and not args.fresh_start:
+        try:
+            _cand = torch.load(RESUME_PATH, map_location="cpu", weights_only=False)
+            if _cand.get("config_sig") == _config_sig():
+                _ckpt = _cand
+                print(f"[resume] checkpoint found in {args.artifact_dir}: seeds "
+                      f"{sorted(_ckpt['completed_seeds'])} already done -> resuming (they are NOT recomputed).",
+                      flush=True)
+            else:
+                print("[resume] a checkpoint exists but its config differs from this run -> ignoring it "
+                      "(starting fresh). Use --fresh_start to silence this.", flush=True)
+        except Exception as e:
+            print(f"[resume] could not read checkpoint ({e}) -> starting fresh.", flush=True)
+    # Optional ops/test hook: stop cleanly right after this seed's checkpoint is written.
+    _STOP_AFTER = os.environ.get("_IPM_STOP_AFTER_SEED")
+    _STOP_AFTER = int(_STOP_AFTER) if (_STOP_AFTER not in (None, "")) else None
+
     if args.device == "auto":
         device = torch.device('cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu')
     elif args.device == "cuda" and not torch.cuda.is_available():
@@ -1230,50 +1265,107 @@ def main():
     beta_ndcg_seeds = {(disp, b): [] for disp, _ in BACKBONES for b in betas}
     alpha_ndcg_seeds = {(disp, a): [] for disp, _ in BACKBONES for a in alphas}
     
-    # MostPop-IPC (NEW-9) is seed-invariant (pure function of fixed candidates + train counts),
-    # so compute it ONCE here instead of re-running its per-query loop every seed.
-    print("Precomputing IPC-conditional MostPop (seed-invariant)...", flush=True)
-    _t = time.time()
-    mostpop_ipc_cached = evaluate_mostpop_ipc(test_queries_per_seed[SEEDS[0]], ipc_company_count, train_pop)
-    print(f"  MostPop-IPC precomputed in {time.time()-_t:.1f}s", flush=True)
+    # MostPop-IPC (NEW-9) and CN / Adamic-Adar are seed-invariant (pure functions of the fixed
+    # candidates / graph structure), so compute them ONCE — or restore from a resume checkpoint.
+    if _ckpt is not None:
+        mostpop_ipc_cached = _ckpt["mostpop_ipc_cached"]
+        cn_cached, aa_cached = _ckpt["cn_cached"], _ckpt["aa_cached"]
+        print("[resume] restored MostPop-IPC / CN / AA precomputes (skipping recompute).", flush=True)
+    else:
+        print("Precomputing IPC-conditional MostPop (seed-invariant)...", flush=True)
+        _t = time.time()
+        mostpop_ipc_cached = evaluate_mostpop_ipc(test_queries_per_seed[SEEDS[0]], ipc_company_count, train_pop)
+        print(f"  MostPop-IPC precomputed in {time.time()-_t:.1f}s", flush=True)
+        print("Precomputing Common-Neighbors / Adamic-Adar baselines (seed-invariant)...", flush=True)
+        _t = time.time()
+        cn_cached, aa_cached = evaluate_cn_aa(test_queries_per_seed[SEEDS[0]], cit_neighbors, company_patents, patent_indegree)
+        print(f"  CN/AA precomputed in {time.time()-_t:.1f}s", flush=True)
 
-    # CN / Adamic-Adar are also seed-invariant (pure graph structure) — compute once.
-    print("Precomputing Common-Neighbors / Adamic-Adar baselines (seed-invariant)...", flush=True)
-    _t = time.time()
-    cn_cached, aa_cached = evaluate_cn_aa(test_queries_per_seed[SEEDS[0]], cit_neighbors, company_patents, patent_indegree)
-    print(f"  CN/AA precomputed in {time.time()-_t:.1f}s", flush=True)
-
-    nneg_sweep_results = None   # populated at seed 0 if --nneg_sweep
-    full_pool_results = None     # populated at seed 0 if --full_pool (unsampled full-IPC-pool ranking)
+    # Seed-0-only results: restore from checkpoint if present, else None (filled at seed 0 below).
+    nneg_sweep_results = _ckpt["nneg_sweep_results"] if _ckpt is not None else None
+    full_pool_results = _ckpt["full_pool_results"] if _ckpt is not None else None
 
     # Demand Score (E19) is ALSO seed-invariant (no learned params, fixed candidates), and its
-    # per-query citation-BFS loop is the single most expensive non-GNN step. Compute it ONCE.
-    _demand_queries = test_queries_per_seed[SEEDS[0]]
-    if args.demand_sample and args.demand_sample > 0 and args.demand_sample < len(_demand_queries):
-        _ds_rng = np.random.default_rng(SEEDS[0])
-        _sel = _ds_rng.choice(len(_demand_queries), size=args.demand_sample, replace=False)
-        _demand_queries = [_demand_queries[i] for i in _sel]
-        print(f"Precomputing Demand Score on a {len(_demand_queries)}-query sample (of "
-              f"{len(test_queries_per_seed[SEEDS[0]])}; slow citation BFS)...", flush=True)
+    # per-query citation-BFS loop is the single most expensive non-GNN step. Compute it ONCE —
+    # or restore from the resume checkpoint (this is the ~357s step that resume most benefits from).
+    if _ckpt is not None:
+        demand_orig_ndcg_once = _ckpt["demand_orig_ndcg_once"]
+        demand_rev_ndcg_once = _ckpt["demand_rev_ndcg_once"]
+        print("[resume] restored Demand Score precompute (skipping the slow citation BFS).", flush=True)
     else:
-        print("Precomputing Demand Score original/revised on ALL queries (seed-invariant, slow citation BFS)...", flush=True)
-    _t = time.time()
-    _ranks_demand_orig, _ranks_demand_rev = [], []
-    for q in _demand_queries:
-        ro, _ = demand_score_rank(q[0], q[1], q[3], "original", train_pop, company_last_active,
-                                  patent_ipc, patent_indegree, ipc4_mean_cit, ipc4_global_mean,
-                                  power_threshold, STRATEGIC_IPC4, company_patents, cited_by, all_patents_list)
-        rr, _ = demand_score_rank(q[0], q[1], q[3], "revised", train_pop, company_last_active,
-                                  patent_ipc, patent_indegree, ipc4_mean_cit, ipc4_global_mean,
-                                  power_threshold, STRATEGIC_IPC4, company_patents, cited_by, all_patents_list)
-        _ranks_demand_orig.append(ro)
-        _ranks_demand_rev.append(rr)
-    demand_orig_ndcg_once = aggregate(_ranks_demand_orig)["ndcg@10"]
-    demand_rev_ndcg_once = aggregate(_ranks_demand_rev)["ndcg@10"]
-    print(f"  Demand Score precomputed in {time.time()-_t:.1f}s", flush=True)
+        _demand_queries = test_queries_per_seed[SEEDS[0]]
+        if args.demand_sample and args.demand_sample > 0 and args.demand_sample < len(_demand_queries):
+            _ds_rng = np.random.default_rng(SEEDS[0])
+            _sel = _ds_rng.choice(len(_demand_queries), size=args.demand_sample, replace=False)
+            _demand_queries = [_demand_queries[i] for i in _sel]
+            print(f"Precomputing Demand Score on a {len(_demand_queries)}-query sample (of "
+                  f"{len(test_queries_per_seed[SEEDS[0]])}; slow citation BFS)...", flush=True)
+        else:
+            print("Precomputing Demand Score original/revised on ALL queries (seed-invariant, slow citation BFS)...", flush=True)
+        _t = time.time()
+        _ranks_demand_orig, _ranks_demand_rev = [], []
+        for q in _demand_queries:
+            ro, _ = demand_score_rank(q[0], q[1], q[3], "original", train_pop, company_last_active,
+                                      patent_ipc, patent_indegree, ipc4_mean_cit, ipc4_global_mean,
+                                      power_threshold, STRATEGIC_IPC4, company_patents, cited_by, all_patents_list)
+            rr, _ = demand_score_rank(q[0], q[1], q[3], "revised", train_pop, company_last_active,
+                                      patent_ipc, patent_indegree, ipc4_mean_cit, ipc4_global_mean,
+                                      power_threshold, STRATEGIC_IPC4, company_patents, cited_by, all_patents_list)
+            _ranks_demand_orig.append(ro)
+            _ranks_demand_rev.append(rr)
+        demand_orig_ndcg_once = aggregate(_ranks_demand_orig)["ndcg@10"]
+        demand_rev_ndcg_once = aggregate(_ranks_demand_rev)["ndcg@10"]
+        print(f"  Demand Score precomputed in {time.time()-_t:.1f}s", flush=True)
+
+    # Restore per-seed accumulators from the checkpoint (wholesale; no merge logic) and mark
+    # which seeds are already done so the loop skips them.
+    completed_seeds = set()
+    if _ckpt is not None:
+        metrics_by_model = _ckpt["metrics_by_model"]
+        spearman_by_model = _ckpt["spearman_by_model"]
+        ranks_by_model_by_seed = _ckpt["ranks_by_model_by_seed"]
+        inversion_by_model = _ckpt["inversion_by_model"]
+        error_buckets_by_model = _ckpt["error_buckets_by_model"]
+        error_nfail_by_model = _ckpt["error_nfail_by_model"]
+        case_study_scores0 = _ckpt["case_study_scores0"]
+        strata_metrics_by_seed = _ckpt["strata_metrics_by_seed"]
+        beta_ndcg_seeds = _ckpt["beta_ndcg_seeds"]
+        alpha_ndcg_seeds = _ckpt["alpha_ndcg_seeds"]
+        demand_orig_ndcg_seeds = _ckpt["demand_orig_ndcg_seeds"]
+        demand_rev_ndcg_seeds = _ckpt["demand_rev_ndcg_seeds"]
+        gat_attention_weights = _ckpt["gat_attention_weights"]
+        gat_is_hub_edge = _ckpt["gat_is_hub_edge"]
+        completed_seeds = set(_ckpt["completed_seeds"])
+        print(f"[resume] restored accumulators for {len(completed_seeds)} seed(s); "
+              f"continuing with {[s for s in SEEDS if s not in completed_seeds]}.", flush=True)
+
+    def _save_checkpoint(done_seed):
+        """Atomically snapshot the full accumulator state after a seed completes."""
+        completed_seeds.add(done_seed)
+        payload = {
+            "config_sig": _config_sig(), "completed_seeds": sorted(completed_seeds),
+            "metrics_by_model": metrics_by_model, "spearman_by_model": spearman_by_model,
+            "ranks_by_model_by_seed": ranks_by_model_by_seed, "inversion_by_model": inversion_by_model,
+            "error_buckets_by_model": error_buckets_by_model, "error_nfail_by_model": error_nfail_by_model,
+            "case_study_scores0": case_study_scores0, "strata_metrics_by_seed": strata_metrics_by_seed,
+            "beta_ndcg_seeds": beta_ndcg_seeds, "alpha_ndcg_seeds": alpha_ndcg_seeds,
+            "demand_orig_ndcg_seeds": demand_orig_ndcg_seeds, "demand_rev_ndcg_seeds": demand_rev_ndcg_seeds,
+            "gat_attention_weights": gat_attention_weights, "gat_is_hub_edge": gat_is_hub_edge,
+            "nneg_sweep_results": nneg_sweep_results, "full_pool_results": full_pool_results,
+            "mostpop_ipc_cached": mostpop_ipc_cached, "cn_cached": cn_cached, "aa_cached": aa_cached,
+            "demand_orig_ndcg_once": demand_orig_ndcg_once, "demand_rev_ndcg_once": demand_rev_ndcg_once,
+        }
+        _tmp = RESUME_PATH + ".tmp"
+        torch.save(payload, _tmp)
+        os.replace(_tmp, RESUME_PATH)   # atomic: a crash mid-write cannot corrupt the live checkpoint
+        print(f"[resume] checkpoint saved after seed {done_seed} "
+              f"({len(completed_seeds)}/{num_seeds} seeds done) -> {RESUME_PATH}", flush=True)
 
     # Run Seeds
     for seed in SEEDS:
+        if seed in completed_seeds:
+            print(f"\n--- Skipping Seed {seed} (already in checkpoint) ---", flush=True)
+            continue
         seed_t0 = time.time()
         print(f"\n--- Running Seed {seed} ---", flush=True)
         torch.manual_seed(seed)
@@ -1516,7 +1608,12 @@ def main():
                 alpha_ndcg_seeds[(disp, alpha)].append(aggregate(ranks_a)["ndcg@10"])
         print(f"    [seed {seed}] sweeps (beta/alpha x backbone) done  (+{time.time()-seed_t0:6.1f}s)", flush=True)
         print(f"--- Seed {seed} complete in {time.time()-seed_t0:.1f}s ---", flush=True)
-            
+        _save_checkpoint(seed)
+        if _STOP_AFTER is not None and seed >= _STOP_AFTER:
+            print(f"[resume] _IPM_STOP_AFTER_SEED={_STOP_AFTER} reached -> stopping after seed {seed}. "
+                  f"Re-run the SAME command to resume from seed {seed + 1}.", flush=True)
+            return
+
     print("\nProcessing results and generating diagnostics...")
     
     # 1. Summarize metrics
@@ -1938,6 +2035,13 @@ Percentile CIs from resampling the per-query ranks (captures query-sampling vari
     with open(results_path, "w") as f:
         f.write(md_content)
     print("Report generated successfully.")
+    # Run finished and the report is written; drop the resume checkpoint so the next run starts fresh.
+    try:
+        if os.path.exists(RESUME_PATH):
+            os.remove(RESUME_PATH)
+            print(f"[resume] run complete -> removed checkpoint {RESUME_PATH}.", flush=True)
+    except Exception as e:
+        print(f"[resume] could not remove checkpoint ({e}); safe to delete manually.", flush=True)
 
 if __name__ == '__main__':
     main()

@@ -802,6 +802,14 @@ def main():
     SEEDS = list(range(num_seeds))
     if args.device == "auto":
         device = torch.device('cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu')
+    elif args.device == "cuda" and not torch.cuda.is_available():
+        print("WARNING: --device cuda requested but this runtime has NO CUDA GPU "
+              "(torch.cuda.is_available()=False). On Colab: Runtime > Change runtime type > T4 GPU, "
+              "then reconnect. Falling back to CPU for now (this will be SLOW).")
+        device = torch.device("cpu")
+    elif args.device == "mps" and not torch.backends.mps.is_available():
+        print("WARNING: --device mps requested but MPS is unavailable; falling back to CPU.")
+        device = torch.device("cpu")
     else:
         device = torch.device(args.device)
     print(f"Device: {device}")

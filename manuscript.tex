@@ -19,8 +19,7 @@
 \begin{frontmatter}
 
 \title{Popularity Bias and Cold-Start in Patent Technology-Transfer
-Demand Prediction: A Diagnostic Evaluation of Graph- and Content-Based
-Link Prediction on KIPRIS}
+Demand Prediction: A Diagnostic Evaluation}
 %% Alternative title (also IP&M-appropriate, slightly shorter):
 %% \title{When Learned Models Do Not Beat a Popularity Baseline:
 %% A Diagnostic Evaluation of Patent Technology-Transfer Demand Prediction
@@ -316,7 +315,9 @@ $E_{\mathrm{tr}}\subseteq P\times C$. Each patent carries its frozen 384-d SBERT
 feature $x_p$. For the GNN encoders each company is assigned a \emph{fixed-random}
 feature $x_c\in\mathbb{R}^{64}$ (drawn once as $\mathcal{N}(0,0.1^2)$, never updated),
 with the only learned company-side parameters being a shared linear projection; only
-LightGCN/NGCF use a learnable per-company identity embedding ($d=64$). An encoder
+LightGCN/NGCF use a learnable per-company identity embedding ($d=64$). We ablate this
+random-feature choice with a leakage-free content company representation in
+\S\ref{sec:content}. An encoder
 $f_\theta$ maps nodes to $h_p,h_c\in\mathbb{R}^{16}$ by message passing over
 $E_{\mathrm{cite}}$ and the \emph{training-split} transfers only, and a parameter-free
 decoder scores a pair by the dot product $s(p,c)=h_p^{\top}h_c$; this is the same
@@ -637,6 +638,43 @@ Patent cold-start rate & 91.7\% & 2.4\% \\
 NDCG@10, and (b) AUC inflates across the board.}
 \label{fig:split}
 \end{figure}
+
+\subsection{Content company-feature ablation}
+\label{sec:content}
+A natural objection is that the GNNs underperform only because their company nodes
+carry no content. We therefore replace the fixed-random company feature with the mean
+frozen-SBERT embedding of each company's training-received patents --- a leakage-free
+content representation (the 23.7\% of companies with no training transfer keep a random
+fallback) --- and re-run the temporal protocol. Content company features do not lift
+any learned model above the popularity baselines (Table~\ref{tab:content}): they leave
+the bare GNNs essentially unchanged, and slightly lower (GraphSAGE
+$0.084\!\to\!0.062$, GAT $0.074\!\to\!0.051$), and they sharply degrade the text MLP
+($0.150\!\to\!0.032$, AUC $0.57\!\to\!0.40$), while the popularity skylines, SVD, and
+the CF models are unaffected by construction (their scores do not use this feature).
+Uninformative random company features are therefore not the explanation for the
+diagnosis: even a leakage-free content representation of the company side does not
+recover the transfer signal.
+
+\begin{table}[t]
+\centering
+\caption{Content company-feature ablation (temporal split, NDCG@10 with AUC in
+parentheses). Replacing the fixed-random company feature with the mean SBERT of each
+company's training-received patents does not help the learned models. Rows whose scores
+do not depend on the company feature (MostPop, NGCF, SVD, $\ldots$) are unchanged and
+omitted.}
+\label{tab:content}
+\begin{tabular}{lcc}
+\toprule
+Model & Fixed-random feature & Content (mean-SBERT) feature \\
+\midrule
+Text MLP   & 0.150 (0.574) & 0.032 (0.399) \\
+GraphSAGE  & 0.084 (0.473) & 0.062 (0.481) \\
+GAT        & 0.074 (0.519) & 0.051 (0.504) \\
+\midrule
+MostPop (reference) & \multicolumn{2}{c}{0.197 (0.583)} \\
+\bottomrule
+\end{tabular}
+\end{table}
 
 %% ===========================================================================
 \section{Mitigations (RQ3)}

@@ -1,8 +1,8 @@
 Highlights
 (Elsevier format: 3–5 bullet points, each ≤ 85 characters including spaces.)
 
-- On KIPRIS patent-transfer prediction, no learned model beats a popularity baseline.
-- Failure is traced to popularity bias and a 91.7% patent cold-start regime.
-- A strict tie-break inflates degenerate cold-start models to near-perfect scores.
-- A random split reverses the verdict, making matrix factorization the best model.
-- Standard popularity-bias mitigations give only partial, unstable gains.
+- On KIPRIS patent transfers, no learned model beats a popularity baseline.
+- The failure stems from popularity bias and a 91.7% patent cold-start regime.
+- A strict tie-break wrongly inflates cold-start models to near-perfect scores.
+- A random split reverses the verdict, making matrix factorization best.
+- Standard popularity-bias mitigations yield only partial, unstable gains.

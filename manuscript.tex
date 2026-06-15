@@ -57,11 +57,11 @@ partial, unstable gains.
 \end{abstract}
 
 \begin{highlights}
-\item Under a temporal, same-IPC hard-negative protocol, no learned model beats a popularity baseline on KIPRIS patent-transfer prediction.
-\item The failure is traced to popularity bias (score--popularity $\rho$ up to 1.0) and a 91.7\% patent cold-start regime.
-\item A strict tie-break inflates degenerate cold-start models to near-perfect scores; average-rank tie-breaking is required.
-\item A random split reverses the verdict (SVD becomes best at 0.442), showing that the protocol, not the model, determines the outcome.
-\item Standard popularity-bias mitigations (IPS, logQ, debiased sampling) give only partial, unstable gains.
+\item On KIPRIS patent transfers, no learned model beats a popularity baseline.
+\item The failure stems from popularity bias and a 91.7\% patent cold-start regime.
+\item A strict tie-break wrongly inflates cold-start models to near-perfect scores.
+\item A random split reverses the verdict, making matrix factorization best.
+\item Standard popularity-bias mitigations yield only partial, unstable gains.
 \end{highlights}
 
 \begin{keyword}
@@ -150,8 +150,12 @@ gains are partial and unstable (\S\ref{sec:mitigation}).
 A further contribution is methodological. Under a strict greater-than tie-break,
 cold-start models whose scores are degenerate place the positive first among tied
 candidates and attain inflated scores (\S\ref{sec:tiebreak}); an average-rank
-tie-break removes this artifact. These observations motivate three research
-questions addressed in the paper:
+tie-break removes this artifact.
+
+\subsection{Research questions}
+\label{sec:rqs}
+The diagnosis above motivates three research questions, which we state here and answer
+in the indicated sections:
 \begin{itemize}
 \item \textbf{RQ1.} Does a realistic protocol (temporal split + same-IPC hard
 negatives) change measured performance relative to a random split?
@@ -200,7 +204,15 @@ and sampled-metric constraints. We also use structural link-prediction heuristic
 non-learned baselines. The recurring theme is that this paper's contribution is diagnostic:
 we do not propose a model that outperforms prior art, but an evaluation protocol and
 diagnostic tools that explain \emph{why}, on this task and dataset, learned models do
-not separate from popularity baselines.
+not separate from popularity baselines. This framing places the work in the
+information-retrieval and information-science tradition of treating measurement
+validity as a first-class object of study: the field has long examined how candidate
+sampling, test-collection construction, and metric choice shape conclusions about
+retrieval and recommendation systems \cite{krichene2020,dacrema2019,hidasi2023}, and
+has shown that popularity and exposure effects are properties of the data and the
+evaluation as much as of the model \cite{boratto2021,deldjoo2021}. Our patent-transfer
+case study contributes a new, high-stakes instance to that line and a reusable
+diagnostic protocol for cold-start-heavy ranking.
 
 \subsection{Patent Analytics and Technology-Transfer Prediction}
 A substantial body of work uses patent metadata, classification codes, and citation
@@ -306,6 +318,20 @@ Application numbers are cleaned to digits only before joining. The corpus contai
 (title + abstract) is encoded once with a frozen multilingual Sentence-BERT model
 (\texttt{paraphrase-multilingual-MiniLM-L12-v2}) \cite{reimers2019,reimers2020} into
 384-dimensional features, row-aligned to the patent table.
+
+KIPRIS is a suitable testbed for this study for three reasons. First, it is the
+official national registry of the Korea Intellectual Property Office, so the realized
+technology-transfer records are administratively recorded rather than self-reported,
+and the registry's scale (370,666 patents, 122,519 companies) supports a
+sufficiently-powered temporal evaluation. Second, Korea operates active public
+technology-transfer and commercialization programs, which makes a large volume of
+firm-level transfer transactions observable --- the supervision signal our task
+requires --- whereas in many jurisdictions such transactions are sparse or opaque.
+Third, the same corpus has been the basis of recent graph-based patent-recommendation
+systems that report near-perfect retrieval \cite{kim2025}, so re-evaluating it under a
+realistic protocol speaks directly to a published, contested result. We treat the
+single-jurisdiction scope as a deliberate, well-instrumented case rather than a claim
+of universality, and we return to external validity in \S\ref{sec:limitations}.
 
 \subsection{Heterogeneous Graph and Problem Formulation}
 We model the task as link prediction on a heterogeneous graph $G=(V,E)$ with
@@ -792,6 +818,41 @@ setting reaches it, and IPS gains coincide with below-chance AUC.}
 \end{figure}
 
 %% ===========================================================================
+\section{Discussion}
+\label{sec:discussion}
+
+Read together, the results relocate the contribution from a claim about a model to
+three claims that the evidence can support. The first is about \emph{measurement}: the
+near-perfect numbers reported for graph-based patent recommenders are, on this corpus,
+a product of optimistic evaluation rather than of recovered demand signal --- the same
+matrix-factorization model that is best under a random split (NDCG@10 = 0.442) is
+near-worst under a temporal, same-IPC protocol (0.037), and the sampled-metric,
+full-pool, and rolling-origin checks (\S\ref{sec:sampled}, \S\ref{sec:rq1},
+\S\ref{sec:rolling}) show this is not an artifact of tie-breaking, negative sampling,
+or a single cutoff. The second is about \emph{mechanism}: the failure is not a model
+bug but a property of the supervision and the regime --- popularity bias (score
+correlations up to $\rho = 0.96$ for a learned ranker, a 56\% hard-negative inversion
+rate, 98.8\%/57.8\% of GraphSAGE/GAT errors lost to a more popular candidate) compounded
+by an extreme 91.7\% patent cold-start, and neither richer (content) company features
+nor a 24-configuration architecture sweep moves a learned model to the popularity
+skyline (\S\ref{sec:content}, \S\ref{sec:arch}). The third is about \emph{availability}:
+standard debiasing partially relocates error but does not remove it, and the only gains
+that survive an AUC sanity check are small.
+
+\paragraph{Implications for research and practice.} For \emph{research},
+the results argue for reporting patent-recommendation and technology-transfer
+results under temporal splits with same-class hard negatives and explicit
+cold-start accounting, and for treating a popularity baseline and an AUC sanity
+check as mandatory reference points; near-perfect random-split numbers should be
+read as upper bounds, not as deployment estimates. For \emph{practice},
+technology-transfer intermediaries should not expect a learned ranker to
+outperform a simple popularity or recency heuristic on genuinely new patents
+under this market's data, and a popularity prior is a defensible, low-cost
+operational default; closing the gap will require content-aware company
+representations and exposure-aware supervision rather than a change of graph
+architecture alone.
+
+%% ===========================================================================
 \section{Limitations and Threats to Validity}
 \label{sec:limitations}
 
@@ -871,19 +932,6 @@ and a diagnosis --- with reusable bias-diagnostic tools --- to discipline future
 patent technology-transfer prediction and on cold-start-heavy link prediction more
 broadly.
 
-\paragraph{Implications for research and practice.} For \emph{research},
-the results argue for reporting patent-recommendation and technology-transfer
-results under temporal splits with same-class hard negatives and explicit
-cold-start accounting, and for treating a popularity baseline and an AUC sanity
-check as mandatory reference points; near-perfect random-split numbers should be
-read as upper bounds, not as deployment estimates. For \emph{practice},
-technology-transfer intermediaries should not expect a learned ranker to
-outperform a simple popularity or recency heuristic on genuinely new patents
-under this market's data, and a popularity prior is a defensible, low-cost
-operational default; closing the gap will require content-aware company
-representations and exposure-aware supervision rather than a change of graph
-architecture alone.
-
 %% ===========================================================================
 \section*{Data availability}
 The patent data were obtained from the Korea Intellectual Property Rights Information
@@ -913,67 +961,67 @@ experimental results, without generative AI.
 \begin{thebibliography}{99}
 
 \bibitem{kimgeum2020}
-Kim, J., Geum, Y., 2020. Predicting patent transactions using patent-based machine learning techniques. IEEE Access 8, 188833--188843.
+Kim, M., \& Geum, Y., 2020. Predicting patent transactions using patent-based machine learning techniques. IEEE Access 8, 188833--188843. https://doi.org/10.1109/ACCESS.2020.3030960
 
 \bibitem{lee2016}
-Lee, C., Lee, G., Yoon, B., 2016. Identifying product opportunities using collaborative filtering-based patent analysis. Computers \& Industrial Engineering 99, 247--257.
+Yoon, J., Seo, W., Coh, B., Song, I., \& Lee, J., 2016. Identifying product opportunities using collaborative filtering-based patent analysis. Computers \& Industrial Engineering 99, 247--257. https://doi.org/10.1016/j.cie.2016.04.009
 
 \bibitem{rhee2026}
-Rhee, Kim, Lee, Park, Sung, 2026. Predicting patent transaction cycle using neural hazard model: evidence from technology transactions between companies in South Korea. Scientometrics 131(4), 2549--2583.
+Rhee, J., Kim, M., Lee, S., Park, S., \& Sung, T., 2026. Predicting patent transaction cycle using neural hazard model: evidence from technology transactions between companies in South Korea. Scientometrics 131(4), 2549--2583. https://doi.org/10.1007/s11192-025-05514-9
 
 \bibitem{parkyoon2017}
-Park, I., Yoon, B., 2017. Application technology opportunity discovery from technology portfolios: Use of patent classification and collaborative filtering. Technological Forecasting and Social Change 118, 170--183.
+Park, Y., \& Yoon, J., 2017. Application technology opportunity discovery from technology portfolios: Use of patent classification and collaborative filtering. Technological Forecasting and Social Change 118, 170--183. https://doi.org/10.1016/j.techfore.2017.02.018.
 
 \bibitem{abbasiantaeb2025}
-Abbasiantaeb, Z., Verberne, S., Wang, S., 2025. Tracing science-technology-linkages: A machine learning pipeline for extracting and matching patent in-text references to scientific publications. Information Processing \& Management 62, 104264.
+Abbasiantaeb, Z., Verberne, S., \& Wang, J., 2025. Tracing science-technology-linkages: A machine learning pipeline for extracting and matching patent in-text references to scientific publications. Information Processing \& Management 62, 104264. https://doi.org/10.1016/j.ipm.2025.104264.
 
 \bibitem{hamilton2017}
-Hamilton, W.L., Ying, R., Leskovec, J., 2017. Inductive representation learning on large graphs (GraphSAGE), in: Advances in Neural Information Processing Systems (NeurIPS 2017). arXiv:1706.02216.
+Hamilton, W.L., Ying, R., \& Leskovec, J., 2017. Inductive representation learning on large graphs (GraphSAGE), in: Advances in Neural Information Processing Systems (NeurIPS 2017). arXiv:1706.02216. https://doi.org/10.48550/arXiv.1706.02216
 
 \bibitem{velickovic2018}
-Veli\v{c}kovi\'{c}, P., Cucurull, G., Casanova, A., Romero, A., Li\`{o}, P., Bengio, Y., 2018. Graph attention networks, in: International Conference on Learning Representations (ICLR 2018). arXiv:1710.10903.
+Veli\v{c}kovi\'{c}, P., Cucurull, G., Casanova, A., Romero, A., Li\`{o}, P., \& Bengio, Y., 2018. Graph attention networks, in: International Conference on Learning Representations (ICLR 2018). arXiv:1710.10903. https://doi.org/10.48550/arXiv.1710.10903
 
 \bibitem{brody2022}
-Brody, S., Alon, U., Yahav, E., 2022. How attentive are graph attention networks? (GATv2), in: International Conference on Learning Representations (ICLR 2022). arXiv:2105.14491.
+Brody, S., Alon, U., \& Yahav, E., 2022. How attentive are graph attention networks? (GATv2), in: International Conference on Learning Representations (ICLR 2022). arXiv:2105.14491. https://doi.org/10.48550/arXiv.2105.14491
 
 \bibitem{wang2019}
-Wang, X., He, X., Wang, M., Feng, F., Chua, T.-S., 2019. Neural graph collaborative filtering (NGCF), in: Proceedings of SIGIR 2019. arXiv:1905.08108.
+Wang, X., He, X., Wang, M., Feng, F., \& Chua, T.-S., 2019. Neural graph collaborative filtering (NGCF), in: Proceedings of SIGIR 2019. arXiv:1905.08108. https://doi.org/10.48550/arXiv.1905.08108
 
 \bibitem{he2020}
-He, X., Deng, K., Wang, X., Li, Y., Zhang, Y., Wang, M., 2020. LightGCN: Simplifying and powering graph convolution network for recommendation, in: Proceedings of SIGIR 2020. arXiv:2002.02126.
+He, X., Deng, K., Wang, X., Li, Y., Zhang, Y., \& Wang, M., 2020. LightGCN: Simplifying and powering graph convolution network for recommendation, in: Proceedings of SIGIR 2020. arXiv:2002.02126. https://doi.org/10.48550/arXiv.2002.02126
 
 \bibitem{rendle2009}
-Rendle, S., Freudenthaler, C., Gantner, Z., Schmidt-Thieme, L., 2009. BPR: Bayesian personalized ranking from implicit feedback, in: Proceedings of UAI 2009. arXiv:1205.2618.
+Rendle, S., Freudenthaler, C., Gantner, Z., \& Schmidt-Thieme, L., 2009. BPR: Bayesian personalized ranking from implicit feedback, in: Proceedings of UAI 2009. arXiv:1205.2618. https://doi.org/10.48550/arXiv.1205.2618
 
 \bibitem{reimers2019}
-Reimers, N., Gurevych, I., 2019. Sentence-BERT: Sentence embeddings using Siamese BERT-networks, in: Proceedings of EMNLP 2019. arXiv:1908.10084.
+Reimers, N., \& Gurevych, I., 2019. Sentence-BERT: Sentence embeddings using Siamese BERT-networks, in: Proceedings of EMNLP 2019. arXiv:1908.10084. https://doi.org/10.48550/arXiv.1908.10084
 
 \bibitem{reimers2020}
-Reimers, N., Gurevych, I., 2020. Making monolingual sentence embeddings multilingual using knowledge distillation, in: Proceedings of EMNLP 2020.
+Reimers, N., \& Gurevych, I., 2020. Making monolingual sentence embeddings multilingual using knowledge distillation, in: Proceedings of EMNLP 2020. https://doi.org/10.48550/arXiv.2004.09813
 
 \bibitem{krestel2021}
-Krestel, R., Chikkamath, R., Hewel, C., Risch, J., 2021. A survey on deep learning for patent analysis. World Patent Information.
+Krestel, R., Chikkamath, R., Hewel, C., \& Risch, J., 2021. A survey on deep learning for patent analysis. World Patent Information. https://doi.org/10.1016/j.wpi.2021.102035.
 
 \bibitem{choi2019}
-Choi, Lee, Park, Choi, 2019. Deep patent landscaping model using Transformer and graph embedding. arXiv:1903.05823 (Expert Systems with Applications 2022).
+Choi, S., Lee, H., Park, E., \& Choi, S., 2019. Deep patent landscaping model using Transformer and graph embedding. arXiv:1903.05823 (Expert Systems with Applications 2022). https://doi.org/10.48550/arXiv.1903.05823
 
 \bibitem{chendeng2023}
-Chen, Deng, 2023. Interpretable patent recommendation with knowledge graph and deep learning. Scientific Reports 13, 2586.
+Chen, H., \& Deng, W., 2023. Interpretable patent recommendation with knowledge graph and deep learning. Scientific Reports 13, 2586. https://doi.org/10.1038/s41598-023-28766-y
 
 \bibitem{liu2024}
-Liu, Zhang, Deng, Ma, Fan, 2024. A deep learning method for recommending university patents to industrial clusters by common technological needs mining. Scientometrics.
+Liu Z., Zhang, Y., Deng, W., Ma, J., \& Fan, X., 2024. A deep learning method for recommending university patents to industrial clusters by common technological needs mining. Scientometrics. https://doi.org/10.1007/s11192-024-05052-w
 
 \bibitem{kim2025}
-Kim, M.-S., Jang, Y.-J., Sung, T.-E., 2025. Graph-based technology recommendation system using GAT-NGCF. Expert Systems with Applications 280.
+Kim, M.-S., Jang, Y.-J., Sung, \& T.-E., 2025. Graph-based technology recommendation system using GAT-NGCF. Expert Systems with Applications 280. https://doi.org/10.1016/j.eswa.2025.128240.
 
 \bibitem{meng2020}
-Meng, Z., McCreadie, R., Macdonald, C., Ounis, I., 2020. Exploring data splitting strategies for the evaluation of recommendation models, in: Proceedings of RecSys 2020. arXiv:2007.13237.
+Meng, Z., McCreadie, R., Macdonald, C., Ounis, I., 2020. Exploring data splitting strategies for the evaluation of recommendation models. Proceedings of the 14th ACM Conference on Recommender Systems (RecSys '20), 681–686. https://doi.org/10.1145/3383313.3418479
 
 \bibitem{krichene2020}
-Krichene, W., Rendle, S., 2020. On sampled metrics for item recommendation, in: Proceedings of KDD 2020 (CACM 2022).
+Krichene, W., Rendle, S., 2020. On sampled metrics for item recommendation. Communications of the ACM, 65(7), 75–83. https://doi.org/10.1145/3535335
 
 \bibitem{abdollahpouri2019}
-Abdollahpouri, H., Burke, R., Mobasher, B., 2019. Managing popularity bias in recommender systems with personalized re-ranking, in: Proceedings of FLAIRS 2019. arXiv:1901.07555.
+Abdollahpouri, H., Burke, R., Mobasher, B., 2019. Managing popularity bias in recommender systems with personalized re-ranking. Proceedings of the Thirty-Second International Florida Artificial Intelligence Research Society Conference (FLAIRS-32), 413–418. https://doi.org/10.48550/arXiv.1901.07555
 
 \bibitem{steck2018}
 Steck, H., 2018. Calibrated recommendations, in: Proceedings of RecSys 2018.

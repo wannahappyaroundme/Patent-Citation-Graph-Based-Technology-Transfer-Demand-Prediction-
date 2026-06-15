@@ -1,6 +1,14 @@
-# When Learned Models Lose to Popularity: A Diagnosis of Patent Technology-Transfer Demand Prediction under Realistic Evaluation
+# Popularity Bias and Cold-Start in Patent Technology-Transfer Demand Prediction: A Diagnostic Evaluation
 
-> Complete manuscript draft (v1) for *Information Processing & Management*. All quantitative values are the final ten-seed, average-rank tie-break results from `run_ipm_results_temporal.md` (temporal/main), `run_ipm_results_random.md` (RQ1 contrast), and `CAPTURED_seed0_diagnostics.md` (§5.6). Citations are author–year keys to the verified bibliography in `REFERENCES.md` (no fabricated references). Figures are in `paper_figures/`.
+**Sangwon Lee**¹, **Kyungseok Lee**², **Jaewon Lee**², **Dongkyu Lee**³,\*
+
+¹ Division of International Studies, Hanyang University, Seoul 04763, Republic of Korea
+² School of Mechanical Engineering, Hanyang University, Seoul 04763, Republic of Korea
+³ Quantum AI Task, LG AI Lab, CTO Division, LG Electronics Co., Ltd., 19 Yangjae-daero 11-gil, Seocho-gu, Seoul 06772, Republic of Korea
+
+\* Corresponding author: **Dongkyu Lee** (dongkyu44.lee@lge.com). Co-author email: Kyungseok Lee (bu5119@hanyang.ac.kr).
+
+> **Note on files.** The authoritative, submission-ready version is the LaTeX **`manuscript.tex`** (anonymized, double-blind) plus **`title_page.tex`** (author details). This markdown is an earlier complete draft kept for reference; for the double-anonymized submission, author names appear **only** in `title_page.tex`, never in `manuscript.tex`. All quantitative values are the final ten-seed, average-rank tie-break results from `run_ipm_results_temporal.md`, `run_ipm_results_random.md`, `run_ipm_results_content.md`, `run_ipm_results_roll{0,1,2}.md`, and `CAPTURED_seed0_diagnostics.md`. Citations are author–year keys to the verified bibliography in `REFERENCES.md`. Figures are in `paper_figures/`.
 
 ---
 
